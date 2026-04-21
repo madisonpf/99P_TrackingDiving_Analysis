@@ -1,0 +1,22 @@
+# Raw data (large files)
+RawData/
+Raw_Data/
+
+# Outputs
+Tracking/Outputs/
+Diving/Outputs/
+
+# Large files
+*.csv
+*.zip
+*.nc
+*.tif
+*.rds
+
+# RStudio
+.Rhistory
+.RData
+.Rproj.user
+
+# macOS
+.DS_Store
