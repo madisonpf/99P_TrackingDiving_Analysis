@@ -1,9 +1,27 @@
 ## Raw Data
+Storage of all raw biologging data files for adult females, adult males, and 99P (intersex seal). Adult female data is in multiple storage modes (from multiple years), using both .nc files and .csv files.
 
-This is where you'll store your raw data files. These should typically be files pulled directly from the database or Box, or sent to you by a collaborator. For database downloads, you can rename the file with the table name and download date, but make no other modifications to the file.
+Contents: 
+2004-2020_AdultFemaleData 
+- Contains folders for 2004 - 2020 processed data from Costa et al., 2024
+- Every file is a single individual (file structure is "TOPPID_TrackTDR_Processed.nc")
+- You need a wrapper in R to download the .nc files
+- "NES_Tracking_Diving_Metadata.csv" contains all metadata information for these years (organized in main RawData) 
 
-Note that if you open the file in Excel and save it, even if you make no changes, some fields like dates will be reformatted to Excel's default date format.
+Adult_Male_Metadata
+- Metadata file for these individuals is organized PER individual, see biologging curation code for merging
 
-If you need to make changes to the raw data, you should either make the change in the database and re-download the file, or make the change programatically in *DataCurationCode*.
+Dive_Data
+- Contains all dive data for adult females from 2021 - 2023 ("21-23 ... AdultFemales.csv")
+- All adult male data ("*_Complete.csv")
+- Data for intersex seal ("2025033_...*_QC.csv)
+- Data for one PM2025 female ("2025019...*_QC.csv")
+- female_dives_all.csv is the aggregated adult female diving data for 2004 - 2023
 
-These files will typically *not* be made public upon submission/publication. 
+Track_Data
+- Contains all track data for adult females from 2021 - 2023 ("21-23 ... AdultFemales.csv")
+- All adult male data ("*_Interp.csv")
+- Data for intersex seal (Processed: "2025033_...*_aniMotum_crw.csv", aniMotum load in file: "2025033_...*_aniMotum.csv")
+- Data for one PM2025 female (Processed: "2025019_...*_aniMotum_crw.csv", aniMotum load in file: "2025019_...*_aniMotum.csv")
+- female_tracks_all.csv is the aggregated adult female tracking data for 2004 - 2023
+
