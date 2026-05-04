@@ -25,3 +25,5 @@ Track_Data
 - Data for one PM2025 female (Processed: "2025019_...*_aniMotum_crw.csv", aniMotum load in file: "2025019_...*_aniMotum.csv")
 - female_tracks_all.csv is the aggregated adult female tracking data for 2004 - 2023
 
+NOTE: all_groups_diving.csv and all_groups_tracking.csv contain all of the above groups of data aggregated together (the output of the curation code found in DataCurationCode. 
+
