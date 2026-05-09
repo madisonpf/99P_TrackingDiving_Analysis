@@ -41,6 +41,25 @@ all_tracking_clean <- all_tracking_clean %>%
     )
   )
 
+# Create female breeding-status groups
+all_tracking_clean <- all_tracking_clean %>%
+  mutate(
+    SkipBreed_clean = str_to_lower(str_trim(as.character(SkipBreed))),
+    female_type = case_when(
+      dataset_source == "female" &
+        SkipBreed_clean %in% c("skip", "skipl", "skipp") ~ "Skip adult female",
+      
+      dataset_source == "female" ~ "Normal adult female",
+      dataset_source == "male" ~ "Male",
+      dataset_source == "99P" ~ "99P",
+      TRUE ~ NA_character_
+    )
+  )
+
+# Quick check
+all_tracking_clean %>%
+  count(female_type)
+
 # Create initial plotting dataset with valid coordinates and group labels
 track_map_df <- all_tracking_clean %>%
   filter(!is.na(track_lon), !is.na(track_lat)) %>%
@@ -55,7 +74,9 @@ track_map_df <- all_tracking_clean %>%
 ## Assign trip type based on departure month ----
 # PB = post-breeding trip (Feb-Apr)
 # PM = post-molt trip (May-Jan)
-# 99P is manually assigned as PMtrip_lookup <- all_tracking_clean %>%
+# 99P is manually assigned as PM
+
+trip_lookup <- all_tracking_clean %>%
   distinct(dataset_source, trip_id, depart_datetime, arrival_datetime) %>%
   mutate(
     depart_month = month(depart_datetime),
@@ -84,20 +105,20 @@ all_tracking_clean <- all_tracking_clean %>%
 #Filter tracking data for PM trips only, valid coordinates, and acceptable QC flags
 track_map_df <- all_tracking_clean %>%
   filter(
-    trip == "PM",
+    (trip == "PM" | dataset_source %in% c("male", "99P")),
     !is.na(track_lon),
     !is.na(track_lat),
     is.na(Data_Track_QCFlag) | Data_Track_QCFlag <= 3
   ) %>%
   mutate(
     sex_group = case_when(
-      dataset_source == "female" ~ "Female",
+      dataset_source == "female" & female_type == "Normal adult female" ~ "Normal adult female",
+      dataset_source == "female" & female_type == "Skip adult female" ~ "Skip adult female",
       dataset_source == "male" ~ "Male",
-      dataset_source == "99P" ~ "99P"
+      dataset_source == "99P" ~ "99P",
+      TRUE ~ NA_character_
     ),
     plot_time = coalesce(DateTime, time, date),
-    
-    # Convert longitudes to 0-360 for Pacific-centered plotting
     track_lon_wrap = ifelse(track_lon < 0, track_lon + 360, track_lon)
   ) %>%
   arrange(trip_id, plot_time)
@@ -125,9 +146,8 @@ label_df <- track_map_df %>%
     .groups = "drop"
   )
 
-# Plot horizontal movement tracks for Female, Male, and 99P ----
-# Use world2df to account for crossing dateline 
-# Color by sex group
+##### TRACK MAP PLOT #####
+
 p_track_map_PM <- ggplot() +
   geom_polygon(
     data = world2_df,
@@ -138,10 +158,18 @@ p_track_map_PM <- ggplot() +
   ) +
   
   geom_path(
-    data = track_map_df %>% filter(sex_group == "Female"),
+    data = track_map_df %>% filter(sex_group == "Normal adult female"),
     aes(x = track_lon_wrap, y = track_lat, group = trip_id),
     color = "#F4A6B7",
     alpha = 0.12,
+    linewidth = 0.9
+  ) +
+  
+  geom_path(
+    data = track_map_df %>% filter(sex_group == "Skip adult female"),
+    aes(x = track_lon_wrap, y = track_lat, group = trip_id),
+    color = "#3BB371",
+    alpha = 0.18,
     linewidth = 0.9
   ) +
   
@@ -176,9 +204,10 @@ p_track_map_PM <- ggplot() +
   
   scale_color_manual(
     values = c(
-      Female = "#F4A6B7",
-      Male = "#386fa4",
-      `99P` = "#6A3D9A"
+      "Normal adult female" = "#F4A6B7",
+      "Skip adult female"   = "#3BB371",
+      "Male"                = "#386fa4",
+      "99P"                 = "#6A3D9A"
     )
   ) +
   
@@ -213,6 +242,7 @@ p_track_map_PM <- ggplot() +
     axis.title = element_text(face = "bold"),
     legend.position = "none"
   ); p_track_map_PM
+
 
 # Save horizontal track map
 ggsave(
@@ -313,7 +343,7 @@ summary(all_tracking_clean$DistAno)
 # Metrics describe spatial behavior relative to coastline and colony
 deployment_dist <- all_tracking_clean %>%
   filter(trip == "PM") %>%
-  group_by(dataset_source, animal_id, trip_id) %>%
+  group_by(dataset_source, animal_id, trip_id, female_type) %>%
   summarise(
     mean_DistCoast = mean(DistCoast, na.rm = TRUE),
     mean_DistAno   = mean(DistAno, na.rm = TRUE),
@@ -323,7 +353,8 @@ deployment_dist <- all_tracking_clean %>%
   ) %>%
   mutate(
     group = case_when(
-      dataset_source == "female" ~ "Female",
+      dataset_source == "female" & female_type == "Normal adult female" ~ "Normal adult female",
+      dataset_source == "female" & female_type == "Skip adult female" ~ "Skip adult female",
       dataset_source == "male" ~ "Male",
       dataset_source == "99P" ~ "99P"
     )
@@ -331,7 +362,7 @@ deployment_dist <- all_tracking_clean %>%
 
 # Keep Female and Male deployments for group comparisons
 sex_compare <- deployment_dist %>%
-  filter(group %in% c("Female", "Male"))
+  filter(group %in% c("Normal adult female", "Skip adult female", "Male"))
 
 # Remove extreme outliers using the standard 1.5 × IQR rule
 # This prevents rare extreme trips from dominating boxplot summaries
@@ -355,6 +386,9 @@ p99_vals <- deployment_dist %>%
 # Plot: Distance from coast ----
 # Compare mean distance from coastline between Female and Male groups
 # 99P is plotted as a reference point
+# Plot: Distance from coast ----
+# Compare mean distance from coastline between Female and Male groups
+# 99P is plotted as a reference point
 p_coast <- ggplot(
   sex_compare_no_outliers,
   aes(x = group, y = mean_DistCoast, fill = group)
@@ -366,21 +400,25 @@ p_coast <- ggplot(
   ) +
   geom_point(
     data = p99_vals,
-    aes(x = "Female", y = mean_DistCoast),
+    aes(x = "Normal adult female", y = mean_DistCoast),
     inherit.aes = FALSE,
     color = "black",
     size = 3
   ) +
   geom_text(
     data = p99_vals,
-    aes(x = "Female", y = mean_DistCoast, label = "99P"),
+    aes(x = "Normal adult female", y = mean_DistCoast, label = "99P"),
     inherit.aes = FALSE,
     vjust = -1,
     size = 4,
     fontface = "bold"
   ) +
   scale_fill_manual(
-    values = c(Female = "#F4A6B7", Male = "#9EC9FF")
+    values = c(
+      "Normal adult female" = "#F4A6B7",
+      "Skip adult female" = "#3BB371",
+      "Male" = "#9EC9FF"
+    )
   ) +
   labs(
     x = NULL,
@@ -395,9 +433,6 @@ p_coast <- ggplot(
     axis.title = element_text(face = "bold")
   ); p_coast
 
-# Plot: Distance from colony ----
-# Compare mean distance from Año Nuevo colony between groups
-# 99P is plotted as a reference point
 p_colony <- ggplot(
   sex_compare_no_outliers,
   aes(x = group, y = mean_DistAno, fill = group)
@@ -409,21 +444,25 @@ p_colony <- ggplot(
   ) +
   geom_point(
     data = p99_vals,
-    aes(x = "Female", y = mean_DistAno),
+    aes(x = "Normal adult female", y = mean_DistAno),
     inherit.aes = FALSE,
     color = "black",
     size = 3
   ) +
   geom_text(
     data = p99_vals,
-    aes(x = "Female", y = mean_DistAno, label = "99P"),
+    aes(x = "Normal adult female", y = mean_DistAno, label = "99P"),
     inherit.aes = FALSE,
     vjust = -1,
     size = 4,
     fontface = "bold"
   ) +
   scale_fill_manual(
-    values = c(Female = "#F4A6B7", Male = "#9EC9FF")
+    values = c(
+      "Normal adult female" = "#F4A6B7",
+      "Skip adult female" = "#3BB371",
+      "Male" = "#9EC9FF"
+    )
   ) +
   labs(
     x = NULL,
@@ -438,6 +477,7 @@ p_colony <- ggplot(
     axis.title = element_text(face = "bold")
   ); p_colony
 
+
 # Save distance-from-colony figure
 ggsave(
   filename = "./Tracking/Outputs/Distance_from_colony_boxplot_PM.png",
@@ -447,9 +487,17 @@ ggsave(
   dpi = 600
 )
 
+ggsave(
+  filename = "./Tracking/Outputs/Distance_from_coast_boxplot_PM.png",
+  plot = p_coast,
+  width = 6,
+  height = 5,
+  dpi = 600
+)
 
 
 ##### UTILIZATION DISTRIBUTION - ADAPTED MOLLY CODE ##### 
+
 # 1. Prepare data ----
 ud_df <- track_map_df %>%
   filter(
@@ -461,7 +509,11 @@ ud_df <- track_map_df %>%
 
 # female + male only for UDs
 ud_df_fit <- ud_df %>%
-  filter(group %in% c("Female", "Male")) %>%
+  filter(group %in% c(
+    "Normal adult female",
+    "Skip adult female",
+    "Male"
+  )) %>%
   group_by(group) %>%
   filter(n() >= 5) %>%
   ungroup()
@@ -497,13 +549,13 @@ land <- ne_countries(scale = "medium", returnclass = "sf") %>%
   st_transform(crs = pacific_crs)
 
 # coastline boundary shapefile for barrier-constrained UD
-
 boundary <- st_read("./Tracking/barrier_coarse.shp", quiet = TRUE) %>%
   st_transform(crs = pacific_crs)
 
 # quick CRS check
 identical(st_crs(tracking_sf), st_crs(boundary))
 identical(st_crs(tracking_sf), st_crs(land))
+
 
 # 3. Create shared grid ----
 
@@ -527,6 +579,7 @@ y <- seq(
 xygrid <- expand.grid(x = x, y = y)
 coordinates(xygrid) <- ~ x + y
 gridded(xygrid) <- TRUE
+
 
 # 4. Create coastline barrier object ----
 
@@ -560,9 +613,11 @@ image(uds_href)
 hvalues <- list()
 
 for (j in seq_along(uds_href)) {
+  
   h_j <- uds_href[[j]]@h$h
   h_j <- ifelse(h_j > maxh, maxh, h_j)
   id_j <- names(uds_href)[j]
+  
   hvalues[[j]] <- c(h_j, id_j)
 }
 
@@ -611,6 +666,7 @@ uddf <- optud
 
 image(uddf)
 
+
 # 7. Mask land and renormalize ----
 
 udsgdf <- as(estUDm2spixdf(uddf), "SpatialGridDataFrame")
@@ -624,15 +680,13 @@ land_sp <- as(land, "Spatial")
 # mask out land
 rstack_msk <- mask(rstack, land_sp, inverse = TRUE)
 
-# convert mask to 1 / NA template
-mask_template <- rstack_msk[[1]]
-mask_vals <- !is.na(values(mask_template))
-
 # renormalize each UD so probabilities sum to 1 after masking
-resu <- lapply(seq_len(nlayers(rstack_msk)), function(i) {
+resu <- lapply(seq_len(raster::nlayers(rstack_msk)), function(i) {
+  
   vals <- values(rstack_msk[[i]])
   vals[is.na(vals)] <- 0
   vals <- vals / sum(vals, na.rm = TRUE)
+  
   vals
 })
 
@@ -648,9 +702,11 @@ masked_grid@data <- resu
 fullgrid(masked_grid) <- FALSE
 
 re <- lapply(seq_len(ncol(masked_grid@data)), function(m) {
+  
   so <- new("estUD", masked_grid[, m])
   so@h <- list(h = 0, meth = "specified")
   so@vol <- FALSE
+  
   so
 })
 
@@ -674,216 +730,20 @@ contours50 <- getverticeshr(
   standardize = TRUE
 )
 
-# convert to sf object
-c90 <- st_as_sf(contoursN90)
-
-c90 <- st_transform(c90, crs = 4326)
-
-c90$area <- st_area(c90)/(1000*1000)
-
 c90 <- st_as_sf(contours90) %>%
   mutate(
     level = "90%",
-    area_km2 = area / 1e6
+    area_km2 = as.numeric(st_area(.) / 1e6)
   )
 
 c50 <- st_as_sf(contours50) %>%
   mutate(
     level = "50%",
-    area_km2 = area / 1e6
+    area_km2 = as.numeric(st_area(.) / 1e6)
   )
 
-# 9. Overlap ----
 
-ko90 <- kerneloverlaphr(
-  uddf,
-  method = "BA",
-  percent = 90
-)
-
-print(ko90)
-range(ko90, na.rm = TRUE)
-
-overlap90_df <- as.data.frame(as.table(ko90)) %>%
-  rename(
-    ID1 = Var1,
-    ID2 = Var2,
-    BA = Freq
-  ) %>%
-  filter(ID1 != ID2)
-
-print(overlap90_df)
-
-### Print amount of 99P tracks within the male and female UDs 
-
-# 99P points inside female/male 90% KUD
-pts_99P <- track_99P_sf
-
-female90 <- c90 %>% dplyr::filter(id == "Female")
-male90   <- c90 %>% dplyr::filter(id == "Male")
-
-in_female90 <- st_within(pts_99P, female90, sparse = FALSE)[, 1]
-in_male90   <- st_within(pts_99P, male90, sparse = FALSE)[, 1]
-
-track_overlap_90 <- data.frame(
-  group = c("Female", "Male"),
-  n_99P_points_in_KUD = c(sum(in_female90), sum(in_male90)),
-  n_99P_points_total = nrow(pts_99P),
-  pct_99P_points_in_KUD = c(
-    100 * mean(in_female90),
-    100 * mean(in_male90)
-  )
-)
-
-print(track_overlap_90)
-
-#For 50% 
-female50 <- c50 %>% dplyr::filter(id == "Female")
-male50   <- c50 %>% dplyr::filter(id == "Male")
-
-in_female50 <- st_within(pts_99P, female50, sparse = FALSE)[, 1]
-in_male50   <- st_within(pts_99P, male50, sparse = FALSE)[, 1]
-
-track_overlap_50 <- data.frame(
-  group = c("Female", "Male"),
-  n_99P_points_in_core = c(sum(in_female50), sum(in_male50)),
-  n_99P_points_total = nrow(pts_99P),
-  pct_99P_points_in_core = c(
-    100 * mean(in_female50),
-    100 * mean(in_male50)
-  )
-)
-
-print(track_overlap_50)
-
-
-##### SUMMARY TABLES #####
-# 1) 99P vs Female/Male
-# 2) Female vs Male overlap
-
-# Objects
-pts_99P   <- track_99P_sf
-line_99P  <- track_99P_line
-
-female90 <- c90 %>% dplyr::filter(id == "Female")
-male90   <- c90 %>% dplyr::filter(id == "Male")
-
-female50 <- c50 %>% dplyr::filter(id == "Female")
-male50   <- c50 %>% dplyr::filter(id == "Male")
-
-
-# Helper functions ----
-pct_points_inside <- function(points, polygon) {
-  100 * mean(st_within(points, polygon, sparse = FALSE)[, 1])
-}
-
-length_inside_km <- function(line, polygon) {
-  inter <- st_intersection(line, polygon)
-  if (nrow(inter) == 0) return(0)
-  as.numeric(sum(st_length(inter))) / 1000
-}
-
-safe_overlap_area_km2 <- function(poly1, poly2) {
-  inter <- st_intersection(poly1, poly2)
-  if (nrow(inter) == 0) return(0)
-  as.numeric(sum(st_area(inter))) / 1e6
-}
-
-# 1) 99P point + length overlap ----
-total_track_length_km <- as.numeric(st_length(line_99P)) / 1000
-n_99P_points <- nrow(pts_99P)
-
-len_f90 <- length_inside_km(line_99P, female90)
-len_m90 <- length_inside_km(line_99P, male90)
-len_f50 <- length_inside_km(line_99P, female50)
-len_m50 <- length_inside_km(line_99P, male50)
-
-track_overlap_table <- data.frame(
-  comparison = c("99P vs Female", "99P vs Male"),
-  pct_99P_points_in_90 = c(
-    pct_points_inside(pts_99P, female90),
-    pct_points_inside(pts_99P, male90)
-  ),
-  pct_99P_points_in_50 = c(
-    pct_points_inside(pts_99P, female50),
-    pct_points_inside(pts_99P, male50)
-  ),
-  overlap_length_90_km = c(len_f90, len_m90),
-  overlap_length_50_km = c(len_f50, len_m50),
-  pct_99P_length_in_90 = 100 * c(len_f90, len_m90) / total_track_length_km,
-  pct_99P_length_in_50 = 100 * c(len_f50, len_m50) / total_track_length_km,
-  n_99P_points = n_99P_points,
-  total_99P_length_km = total_track_length_km
-)
-
-print(track_overlap_table)
-
-
-# 2) Female vs Male overlap ----
-
-# build 2D-only summary table
-male90 <- female_male_overlap_table %>%
-  filter(KUD_level == "90%")
-
-male50 <- female_male_overlap_table %>%
-  filter(KUD_level == "50%")
-
-table2_2d <- data.frame(
-  sex = c("male", "", "female", ""),
-  kernel_density = c("90%", "50%", "90%", "50%"),
-  
-  area_km2 = c(
-    male90$male_area_km2,
-    male50$male_area_km2,
-    male90$female_area_km2,
-    male50$female_area_km2
-  ),
-  
-  pct_overlap = c(
-    male90$pct_male_range_overlapped_by_female,
-    male50$pct_male_range_overlapped_by_female,
-    male90$pct_female_range_overlapped_by_male,
-    male50$pct_female_range_overlapped_by_male
-  )
-) %>%
-  mutate(
-    area_km2 = round(area_km2, 1),
-    pct_overlap = round(pct_overlap, 2)
-  )
-
-table2_2d #print 
-
-table2_2d_gt <- table2_2d %>%
-  gt() %>%
-  cols_label(
-    sex = "sex",
-    kernel_density = "kernel density",
-    area_km2 = html("area (km<sup>2</sup>)"),
-    pct_overlap = "% overlap"
-  ) %>%
-  tab_options(
-    table.font.size = 16,
-    data_row.padding = px(6)
-  )
-
-write.csv(track_overlap_table, "./Tracking/Outputs/99P_vs_sex_KUD_overlap_table.csv", row.names = FALSE)
-write.csv(table2_2d, "./Tracking/Outputs/male_female_KUD_overlap_table.csv", row.names = FALSE)
-
-
-# 10. Area tables ----
-
-area90_df <- c90 %>%
-  st_drop_geometry() %>%
-  dplyr::select(id, level, area_km2)
-
-area50_df <- c50 %>%
-  st_drop_geometry() %>%
-  dplyr::select(id, level, area_km2)
-
-print(area90_df)
-print(area50_df)
-
-# 11. Build 99P line ----
+# 9. Build 99P line ----
 
 track_99P_line <- track_99P_sf %>%
   arrange(plot_time) %>%
@@ -897,7 +757,17 @@ track_lines_sf <- tracking_sf %>%
   st_cast("LINESTRING") %>%
   ungroup()
 
-# 12. Plot extents ----
+track_lines_sf <- track_lines_sf %>%
+  mutate(
+    group = recode(
+      group,
+      "Normal adult female" = "Normal.adult.female",
+      "Skip adult female"   = "Skip.adult.female"
+    )
+  )
+
+
+# 10. Plot extents ----
 
 bb <- st_bbox(c90)
 
@@ -914,25 +784,29 @@ ylim <- c(
   as.numeric(bb["ymax"] + ypad)
 )
 
-plot_box <- st_as_sfc(st_bbox(
-  c(
-    xmin = xlim[1],
-    xmax = xlim[2],
-    ymin = ylim[1],
-    ymax = ylim[2]
-  ),
-  crs = st_crs(c90)
-))
+plot_box <- st_as_sfc(
+  st_bbox(
+    c(
+      xmin = xlim[1],
+      xmax = xlim[2],
+      ymin = ylim[1],
+      ymax = ylim[2]
+    ),
+    crs = st_crs(c90)
+  )
+)
 
 land_crop <- st_crop(land, plot_box)
 
 pal <- c(
-  'Female' = "#F4A6B7",
-  'Male'   = "#386fa4",
-  `99P`  = "#6A3D9A"
+  "Normal.adult.female" = "#F4A6B7",
+  "Skip.adult.female"   = "#3BB371",
+  "Male"                = "#386fa4",
+  "99P"                 = "#6A3D9A"
 )
 
-# 13. Build final plot ----
+
+# 11. Build final plot ----
 
 ud_plot <- ggplot() +
   
@@ -943,36 +817,15 @@ ud_plot <- ggplot() +
     linewidth = 0.2
   ) +
   
-  #  geom_sf(
-  #    data = track_lines_sf,
-  #    aes(color = group),
-  #    linewidth = 0.2,
-  #    alpha = 0.20,
-  #    lineend = "round",
-  #    show.legend = TRUE
-  #  ) +
+  geom_sf(
+    data = c90,
+    aes(fill = id),
+    alpha = 0.30,
+    color = NA
+  ) +
   
-  # 90% KUD: Female first, then Male
   geom_sf(
-    data = dplyr::filter(c90, id == "Female"),
-    aes(fill = id),
-    alpha = 0.30,
-    color = NA
-  ) +
-  geom_sf(
-    data = dplyr::filter(c50, id == "Female"),
-    aes(fill = id),
-    alpha = 0.65,
-    color = NA
-  ) + 
-  geom_sf(
-    data = dplyr::filter(c90, id == "Male"),
-    aes(fill = id),
-    alpha = 0.30,
-    color = NA
-  ) +
-  geom_sf(
-    data = dplyr::filter(c50, id == "Male"),
+    data = c50,
     aes(fill = id),
     alpha = 0.65,
     color = NA
@@ -993,7 +846,11 @@ ud_plot <- ggplot() +
   ) +
   
   scale_fill_manual(
-    values = pal[c("Male", "Female")],
+    values = pal[c(
+      "Normal.adult.female",
+      "Skip.adult.female",
+      "Male"
+    )],
     name = "50% and 90% KUD"
   ) +
   
@@ -1003,6 +860,10 @@ ud_plot <- ggplot() +
   ) +
   
   guides(
+    fill = guide_legend(
+      override.aes = list(alpha = c(0.65, 0.65, 0.65))
+    ),
+    
     color = guide_legend(
       override.aes = list(
         linewidth = 1.6,
@@ -1012,13 +873,105 @@ ud_plot <- ggplot() +
   ) +
   
   theme_bw(base_size = 14) + 
+  
   theme(
     panel.grid.major = element_blank(),
     panel.grid.minor = element_blank(),
     axis.text = element_blank(),
     axis.ticks = element_blank(),
-    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.6)
+    panel.border = element_rect(
+      color = "black",
+      fill = NA,
+      linewidth = 0.6
+    )
   ); ud_plot
+
+# 11. Build UD plot with tracks ----
+
+ud_plot_w_tracks <- ggplot() +
+  
+  geom_sf(
+    data = land_crop,
+    fill = "grey92",
+    color = "grey65",
+    linewidth = 0.2
+  ) +
+  
+  geom_sf(
+    data = track_lines_sf,
+    aes(color = group),
+    linewidth = 0.25,
+    alpha = 0.25,
+    lineend = "round",
+    show.legend = TRUE
+  ) +
+  
+  geom_sf(
+    data = c90,
+    aes(fill = id),
+    alpha = 0.30,
+    color = NA
+  ) +
+  
+  geom_sf(
+    data = c50,
+    aes(fill = id),
+    alpha = 0.65,
+    color = NA
+  ) +
+  
+  geom_sf(
+    data = track_99P_line,
+    aes(color = "99P"),
+    linewidth = 1.2,
+    alpha = 0.95,
+    lineend = "round"
+  ) +
+  
+  coord_sf(
+    xlim = xlim,
+    ylim = ylim,
+    expand = FALSE
+  ) +
+  
+  scale_fill_manual(
+    values = pal[c(
+      "Normal.adult.female",
+      "Skip.adult.female",
+      "Male"
+    )],
+    name = "50% and 90% KUD"
+  ) +
+  
+  scale_color_manual(
+    values = pal,
+    name = "Tracks"
+  ) +
+  
+  guides(
+    fill = guide_legend(
+      override.aes = list(alpha = 0.65)
+    ),
+    color = guide_legend(
+      override.aes = list(
+        linewidth = 1.6,
+        alpha = 1
+      )
+    )
+  ) +
+  
+  theme_bw(base_size = 14) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.border = element_rect(
+      color = "black",
+      fill = NA,
+      linewidth = 0.6
+    )
+  ); ud_plot_w_tracks
 
 ggsave(
   filename = "./Tracking/Outputs/UD_99P_overlap_map_notracks.png",
@@ -1027,6 +980,121 @@ ggsave(
   height = 6,
   dpi = 600,
   bg = "white"
+)
+
+ggsave(
+  filename = "./Tracking/Outputs/UD_99P_overlap_map_w_tracks.png",
+  plot = ud_plot_w_tracks,
+  width = 8,
+  height = 6,
+  dpi = 600,
+  bg = "white"
+)
+
+
+##### UTILIZATION DISTRIBUTION - CALCULATE OVERLAP METRICS ##### 
+# Make sure UD group names match palette / plotting names ----
+c90 <- c90 %>%
+  mutate(
+    id = recode(
+      id,
+      "Normal.adult.female" = "Normal adult female",
+      "Skip.adult.female"   = "Skip adult female"
+    )
+  )
+
+c50 <- c50 %>%
+  mutate(
+    id = recode(
+      id,
+      "Normal.adult.female" = "Normal adult female",
+      "Skip.adult.female"   = "Skip adult female"
+    )
+  )
+
+# 99P objects ----
+pts_99P  <- track_99P_sf
+line_99P <- track_99P_line
+
+# Group UD polygons ----
+normal_female90 <- c90 %>% dplyr::filter(id == "Normal adult female")
+skip_female90   <- c90 %>% dplyr::filter(id == "Skip adult female")
+male90          <- c90 %>% dplyr::filter(id == "Male")
+
+normal_female50 <- c50 %>% dplyr::filter(id == "Normal adult female")
+skip_female50   <- c50 %>% dplyr::filter(id == "Skip adult female")
+male50          <- c50 %>% dplyr::filter(id == "Male")
+
+# Helper functions ----
+pct_points_inside <- function(points, polygon) {
+  if (nrow(polygon) == 0) return(NA_real_)
+  100 * mean(st_within(points, polygon, sparse = FALSE)[, 1])
+}
+
+length_inside_km <- function(line, polygon) {
+  if (nrow(polygon) == 0) return(NA_real_)
+  
+  inter <- st_intersection(line, polygon)
+  
+  if (nrow(inter) == 0) return(0)
+  
+  as.numeric(sum(st_length(inter))) / 1000
+}
+
+# Total 99P track information ----
+total_track_length_km <- as.numeric(st_length(line_99P)) / 1000
+n_99P_points <- nrow(pts_99P)
+
+# 99P track length inside each 90% UD ----
+len_nf90 <- length_inside_km(line_99P, normal_female90)
+len_sf90 <- length_inside_km(line_99P, skip_female90)
+len_m90  <- length_inside_km(line_99P, male90)
+
+# 99P track length inside each 50% UD ----
+len_nf50 <- length_inside_km(line_99P, normal_female50)
+len_sf50 <- length_inside_km(line_99P, skip_female50)
+len_m50  <- length_inside_km(line_99P, male50)
+
+# Summary table ----
+track_overlap_table <- data.frame(
+  comparison = c(
+    "99P vs Normal adult female",
+    "99P vs Skip adult female",
+    "99P vs Male"
+  ),
+  
+  pct_99P_points_in_90 = c(
+    pct_points_inside(pts_99P, normal_female90),
+    pct_points_inside(pts_99P, skip_female90),
+    pct_points_inside(pts_99P, male90)
+  ),
+  
+  pct_99P_points_in_50 = c(
+    pct_points_inside(pts_99P, normal_female50),
+    pct_points_inside(pts_99P, skip_female50),
+    pct_points_inside(pts_99P, male50)
+  ),
+  
+  overlap_length_90_km = c(
+    len_nf90,
+    len_sf90,
+    len_m90
+  ),
+  
+  overlap_length_50_km = c(
+    len_nf50,
+    len_sf50,
+    len_m50
+  ),
+  
+  
+  n_99P_points = n_99P_points
+)
+
+track_overlap_table
+
+write.csv(
+  track_overlap_table,"./Tracking/Outputs/99P_vs_group_KUD_overlap_table.csv", row.names = FALSE
 )
 
 write.csv(all_tracking_clean, "./Tracking/Outputs/all_groups_tracking.csv")
