@@ -7,11 +7,11 @@ library(purrr)
 library(stringr)
 library(readr)
 
-setwd("~/Documents/PhD Documents/99P Analysis/99P_TrackingDiving_Analysis")
+setwd("~/Documents/PhD Documents/99P Analysis")
 
 ## LOADING IN ADULT FEMALE DATA ## 
 adult_female_tracking <- read.csv("./Tracking/Track_Data/female_ad_tracks_all.csv", stringsAsFactors = FALSE)
-adult_female_dives <- read.csv("./Diving/Dive_Data/female_ad_dives_all.csv", stringsAsFactors = FALSE)
+adult_female_dives <- read.csv("./99P_TrackingDiving_Analysis/RawData/Dive_Data/female_ad_dives_all.csv", stringsAsFactors = FALSE)
 
 
 ##### HELPER FUNCTIONS #####
@@ -181,7 +181,7 @@ metadata_cols <- cols(
 )
 
 adult_male_metadata <- read_and_bind_csvs(
-  path = "./Tracking/Track_Data/Adult_Male_Data_csvs",
+  path = "./99P_TrackingDiving_Analysis/RawData/Adult_Male_Metadata",
   pattern = "MetaData\\.csv$",
   col_types = metadata_cols
 ) %>%
@@ -199,12 +199,12 @@ adult_male_metadata <- read_and_bind_csvs(
   )
 
 adult_male_tracking <- read_and_bind_csvs(
-  path = "./Tracking/Track_Data",
+  path = "./99P_TrackingDiving_Analysis/RawData/Track_Data",
   pattern = "Best_Interp\\.csv$"
 )
 
 adult_male_diving <- read_and_bind_csvs(
-  path = "./Diving/Dive_Data",
+  path = "./99P_TrackingDiving_Analysis/RawData/Dive_Data",
   pattern = "DiveStat_Complete\\.csv$"
 ) %>%
   mutate(
@@ -214,12 +214,12 @@ adult_male_diving <- read_and_bind_csvs(
 ##### LOAD 99P DATA #####
 
 j699_tracking <- read.csv(
-  "./Tracking/Track_Data/2025033_116855_GPS_Argos_AniMotum_crw.csv",
+  "./99P_TrackingDiving_Analysis/RawData/Track_Data/2025033_116855_GPS_Argos_AniMotum_crw.csv",
   stringsAsFactors = FALSE
 )
 
 j699_diving <- read.csv(
-  "./Diving/Dive_Data/2025033_25A0160_DAprep_full_iknos_DiveStat_QC.csv",
+  "./99P_TrackingDiving_Analysis/RawData/Dive_Data/2025033_25A0160_DAprep_full_iknos_DiveStat_QC.csv",
   stringsAsFactors = FALSE
 )
 
@@ -371,12 +371,11 @@ all_tracking_clean <- all_tracking %>%
     sex = coalesce(Animal_Sex, Sex),
     trip = coalesce(Deployment_Trip, trip),
     deployment_year = coalesce(Deployment_Year, year, year_info),
-    track_lat = coalesce(lat, Lat),
-    track_lon = coalesce(lon, Lon),
+    track_lat = coalesce(lat, Lat, Lat_Interp),
+    track_lon = coalesce(lon, Lon, Long_Interp),
     track_speed = coalesce(speed, s)
   ) %>%
   dplyr::select(
-    # duplicate datetime columns
     -Deployment_Departure_Datetime,
     -DepartDate,
     -dep_time,
@@ -384,8 +383,6 @@ all_tracking_clean <- all_tracking %>%
     -ArrivalDate,
     -ArriveDate,
     -arr_time,
-    
-    # duplicate location columns
     -Deployment_Departure_Loc,
     -DepartLoc,
     -depart_loc_all,
@@ -398,8 +395,8 @@ all_tracking_clean <- all_tracking %>%
     -lon,
     -Lat,
     -Lon,
-    
-    # duplicate ID / demographic columns
+    -Lat_Interp,
+    -Long_Interp,
     -Animal_ID,
     -AnimalID,
     -FieldID,
@@ -407,8 +404,6 @@ all_tracking_clean <- all_tracking %>%
     -BirthYear,
     -Animal_Sex,
     -Sex,
-    
-    # duplicate trip / year columns
     -Deployment_Trip,
     -year,
     -year_info,
